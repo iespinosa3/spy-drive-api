@@ -44,15 +44,15 @@ def broadcast_audio(text, filename="comms_audio.mp3"):
     tts.save(filename)
     
     # 2. Play the audio file
-    pygame.mixer.music.load(filename)
-    pygame.mixer.music.play()
+    #pygame.mixer.music.load(filename)
+    #pygame.mixer.music.play()
     
     # Keep the script running until the audio finishes
-    while pygame.mixer.music.get_busy():
-        time.sleep(0.1)
+  #  while pygame.mixer.music.get_busy():
+   #     time.sleep(0.1)
         
     # 3. Clean up the temporary file
-    pygame.mixer.music.unload()
+ #   pygame.mixer.music.unload()
     os.remove(filename)
 
 # --- Test Environment ---

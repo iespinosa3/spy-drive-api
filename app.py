@@ -12,7 +12,7 @@ app = FastAPI(title="Spy Drive Tactical API", version="1.0.0")
 
 # --- THE TARGET DROP ZONE (FIELD TEST) ---
 # Replace these with coordinates slightly down the street from your current location!
-TARGET_LAT = 33.902029 
+TARGET_LAT = 34.902029 
 TARGET_LNG = -84.538694 
 TRIGGER_RADIUS_METERS = 30 # How close you need to get to trigger the audio
 

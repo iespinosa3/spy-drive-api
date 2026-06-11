@@ -11,8 +11,8 @@ app = FastAPI(title="Spy Drive Tactical API", version="1.1.0")
 active_hazards = [
     {
         "id": "DOT-9482",
-        "lat": 33.9023, 
-        "lon": -84.5387,
+        "lat": 36.9023, 
+        "lon": -85.5387,
         "description": "Standstill traffic on Interstate 75 North due to an obstruction."
     }
 ]

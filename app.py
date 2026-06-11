@@ -1,26 +1,21 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 import math
-
+from typing import Optional
 from security_gateway import SecurityGateway
-# Temporarily commenting out the advanced engines for the Field Test
-# from geofence_engine import check_agent_perimeter
-# from supply_drop_engine import SupplyDropEngine
-# from hq_comms import generate_mission_script
 
 app = FastAPI(title="Spy Drive Tactical API", version="1.0.0")
 
-# --- THE TARGET DROP ZONE (FIELD TEST) ---
-# Replace these with coordinates slightly down the street from your current location!
-TARGET_LAT = 34.902029 
-TARGET_LNG = -74.538694 
-TRIGGER_RADIUS_METERS = 30 # How close you need to get to trigger the audio
+TRIGGER_RADIUS_METERS = 30 
 
 # Define the structure of incoming requests using Pydantic
 class TelemetryPacket(BaseModel):
     agent_id: str = Field(..., example="Agent007")
     latitude: float = Field(..., example=33.891)
     longitude: float = Field(..., example=-84.519)
+    # The new dynamic target variables
+    target_lat: Optional[float] = None
+    target_lon: Optional[float] = None
 
 # Calculates distance between two GPS points in meters
 def calculate_distance(lat1, lon1, lat2, lon2):
@@ -38,7 +33,6 @@ def calculate_distance(lat1, lon1, lat2, lon2):
 
 @app.post("/api/v1/telemetry")
 async def process_agent_movement(packet: TelemetryPacket):
-    # 1. Route through the Security Gateway
     validation = SecurityGateway.validate_telemetry(
         packet.latitude, 
         packet.longitude, 
@@ -52,15 +46,22 @@ async def process_agent_movement(packet: TelemetryPacket):
     lat = clean_data["lat"]
     lon = clean_data["lon"]
     
-    # 2. ISOLATED TARGET DISTANCE TEST
-    distance = calculate_distance(lat, lon, TARGET_LAT, TARGET_LNG)
+    # If no target is set on the phone yet, just acknowledge the route
+    if packet.target_lat is None or packet.target_lon is None:
+        return {
+            "action": "KEEP_MOVING",
+            "display_alert": "AWAITING TARGET COORDINATES",
+            "narrative_script": None
+        }
+
+    # If a target IS set, calculate the dynamic distance
+    distance = calculate_distance(lat, lon, packet.target_lat, packet.target_lon)
     
-    # 3. Trigger the Breach Audio or Update the Countdown HUD
     if distance <= TRIGGER_RADIUS_METERS:
         return {
             "action": "PLAY_AUDIO",
             "display_alert": "DROP ZONE REACHED",
-            "narrative_script": "Perimeter breached. You have arrived at the target coordinates. Secure the area and await the payload."
+            "narrative_script": "Perimeter breached. Secure the area and await the payload."
         }
     else:
         return {

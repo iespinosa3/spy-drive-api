@@ -1,24 +1,16 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 import math
+import requests
 from typing import Optional
 from security_gateway import SecurityGateway
 
-app = FastAPI(title="Spy Drive Tactical API", version="1.1.0")
+app = FastAPI(title="Spy Drive Tactical API", version="2.0.0")
 
-# --- THE HAZARD DATABASE ---
-# (You can change these coordinates to a spot near you to test!)
-active_hazards = [
-    {
-        "id": "DOT-9482",
-        "lat": 36.9023, 
-        "lon": -85.5387,
-        "description": "Standstill traffic on Interstate 75 North due to an obstruction."
-    }
-]
-
+# --- GLOBAL INTELLIGENCE CONFIG ---
+TOMTOM_API_KEY = "USByChd1hxLlX6SGEYQWLjRe0xb2JI5X"
 TRIGGER_RADIUS_METERS = 30 
-HAZARD_WARNING_METERS = 800 # Warn the agent if they get within 800 meters (half a mile) of a hazard
+RADAR_RADIUS_METERS = 8000 # ~5 miles
 
 class TelemetryPacket(BaseModel):
     agent_id: str = Field(..., example="Agent007")
@@ -37,6 +29,19 @@ def calculate_distance(lat1, lon1, lat2, lon2):
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
     return R * c
 
+# NEW: Calculates a square search grid around the agent for the TomTom API
+def get_bounding_box(lat, lon, radius_meters):
+    # 1 degree of latitude is roughly 111,000 meters
+    lat_offset = radius_meters / 111000.0
+    lon_offset = radius_meters / (111000.0 * math.cos(math.radians(lat)))
+    
+    min_lon = lon - lon_offset
+    min_lat = lat - lat_offset
+    max_lon = lon + lon_offset
+    max_lat = lat + lat_offset
+    
+    return f"{min_lon},{min_lat},{max_lon},{max_lat}"
+
 @app.post("/api/v1/telemetry")
 async def process_agent_movement(packet: TelemetryPacket):
     validation = SecurityGateway.validate_telemetry(
@@ -49,18 +54,46 @@ async def process_agent_movement(packet: TelemetryPacket):
     lat = clean_data["lat"]
     lon = clean_data["lon"]
     
-    # 1. SCAN FOR HAZARDS (Priority Override)
-    for hazard in active_hazards:
-        hazard_dist = calculate_distance(lat, lon, hazard["lat"], hazard["lon"])
-        if hazard_dist <= HAZARD_WARNING_METERS:
-            return {
-                "action": "PLAY_AUDIO",
-                "event_type": "HAZARD", # Tells the phone NOT to delete the target
-                "display_alert": "HAZARD DETECTED",
-                "narrative_script": f"Warning. Hazard detected ahead. {hazard['description']} Reroute advised."
-            }
+    # ==========================================
+    # 1. LIVE SURVEILLANCE INTERCEPT (TOMTOM API)
+    # ==========================================
+    if TOMTOM_API_KEY != "PASTE_YOUR_API_KEY_HERE":
+        bbox = get_bounding_box(lat, lon, RADAR_RADIUS_METERS)
+        # TomTom Traffic Incident Details API v5
+        tomtom_url = f"https://api.tomtom.com/traffic/services/5/incidentDetails?key={TOMTOM_API_KEY}&bbox={bbox}&fields={'{incidents{properties{iconCategory,magnitudeOfDelay,events{description}}}}'}&language=en-US"
+        
+        try:
+            response = requests.get(tomtom_url, timeout=3)
+            if response.status_code == 200:
+                data = response.json()
+                
+                # Check if there are any incidents in the grid
+                if "incidents" in data and len(data["incidents"]) > 0:
+                    
+                    # Grab the closest/first major incident
+                    incident = data["incidents"][0]["properties"]
+                    delay_category = incident.get("magnitudeOfDelay", 0)
+                    
+                    # TACTICAL TRANSLATOR: Only alert if it's a major delay (Category 2, 3, or 4)
+                    if delay_category >= 2:
+                        # Extract the human-readable description (e.g., "Stationary traffic", "Roadworks")
+                        description = "Unknown obstruction"
+                        if "events" in incident and len(incident["events"]) > 0:
+                            description = incident["events"][0].get("description", "Unknown obstruction")
+                        
+                        return {
+                            "action": "PLAY_AUDIO",
+                            "event_type": "HAZARD",
+                            "display_alert": "LIVE HAZARD DETECTED",
+                            "narrative_script": f"Tactical alert. Live data intercept indicates {description} ahead. Prepare for delays or initiate rerouting protocol."
+                        }
+        except Exception as e:
+            print(f"Surveillance Intercept Failed: {e}")
+            pass # If TomTom fails, silently fall back to standard targeting
 
-    # 2. SCAN FOR TARGET DROP ZONE
+    # ==========================================
+    # 2. TARGET DROP ZONE LOGIC
+    # ==========================================
     if packet.target_lat is None or packet.target_lon is None:
         return {
             "action": "KEEP_MOVING",
@@ -73,7 +106,7 @@ async def process_agent_movement(packet: TelemetryPacket):
     if distance <= TRIGGER_RADIUS_METERS:
         return {
             "action": "PLAY_AUDIO",
-            "event_type": "TARGET_REACHED", # Tells the phone to clear the target
+            "event_type": "TARGET_REACHED",
             "display_alert": "DROP ZONE REACHED",
             "narrative_script": "Perimeter breached. Secure the area and await the payload."
         }

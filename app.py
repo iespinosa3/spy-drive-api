@@ -1,47 +1,3 @@
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
-import math
-import requests
-from typing import Optional
-from security_gateway import SecurityGateway
-
-app = FastAPI(title="Spy Drive Tactical API", version="2.0.0")
-
-# --- GLOBAL INTELLIGENCE CONFIG ---
-TOMTOM_API_KEY = "USByChd1hxLlX6SGEYQWLjRe0xb2JI5X"
-TRIGGER_RADIUS_METERS = 30 
-RADAR_RADIUS_METERS = 8000 # ~5 miles
-
-class TelemetryPacket(BaseModel):
-    agent_id: str = Field(..., example="Agent007")
-    latitude: float = Field(..., example=33.891)
-    longitude: float = Field(..., example=-84.519)
-    target_lat: Optional[float] = None
-    target_lon: Optional[float] = None
-
-def calculate_distance(lat1, lon1, lat2, lon2):
-    R = 6371e3 
-    phi1 = math.radians(lat1)
-    phi2 = math.radians(lat2)
-    delta_phi = math.radians(lat2 - lat1)
-    delta_lambda = math.radians(lon2 - lon1)
-    a = math.sin(delta_phi/2.0)**2 + math.cos(phi1) * math.cos(phi2) * math.sin(delta_lambda/2.0)**2
-    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
-    return R * c
-
-# NEW: Calculates a square search grid around the agent for the TomTom API
-def get_bounding_box(lat, lon, radius_meters):
-    # 1 degree of latitude is roughly 111,000 meters
-    lat_offset = radius_meters / 111000.0
-    lon_offset = radius_meters / (111000.0 * math.cos(math.radians(lat)))
-    
-    min_lon = lon - lon_offset
-    min_lat = lat - lat_offset
-    max_lon = lon + lon_offset
-    max_lat = lat + lat_offset
-    
-    return f"{min_lon},{min_lat},{max_lon},{max_lat}"
-
 @app.post("/api/v1/telemetry")
 async def process_agent_movement(packet: TelemetryPacket):
     validation = SecurityGateway.validate_telemetry(
@@ -57,39 +13,51 @@ async def process_agent_movement(packet: TelemetryPacket):
     # ==========================================
     # 1. LIVE SURVEILLANCE INTERCEPT (TOMTOM API)
     # ==========================================
-    if TOMTOM_API_KEY != "PASTE_YOUR_API_KEY_HERE":
+    if TOMTOM_API_KEY != "USByChd1hxLlX6SGEYQWLjRe0xb2JI5X":
         bbox = get_bounding_box(lat, lon, RADAR_RADIUS_METERS)
-        # TomTom Traffic Incident Details API v5
-        tomtom_url = f"https://api.tomtom.com/traffic/services/5/incidentDetails?key={TOMTOM_API_KEY}&bbox={bbox}&fields={'{incidents{properties{iconCategory,magnitudeOfDelay,events{description}}}}'}&language=en-US"
+        
+        # UPDATED: We added 'geometry{type,coordinates}' to the fields request!
+        fields = "{incidents{properties{iconCategory,magnitudeOfDelay,events{description}},geometry{type,coordinates}}}"
+        tomtom_url = f"https://api.tomtom.com/traffic/services/5/incidentDetails?key={TOMTOM_API_KEY}&bbox={bbox}&fields={fields}&language=en-US"
         
         try:
             response = requests.get(tomtom_url, timeout=3)
             if response.status_code == 200:
                 data = response.json()
                 
-                # Check if there are any incidents in the grid
                 if "incidents" in data and len(data["incidents"]) > 0:
+                    # Grab the closest incident
+                    incident = data["incidents"][0]
+                    properties = incident.get("properties", {})
+                    delay_category = properties.get("magnitudeOfDelay", 0)
                     
-                    # Grab the closest/first major incident
-                    incident = data["incidents"][0]["properties"]
-                    delay_category = incident.get("magnitudeOfDelay", 0)
-                    
-                    # TACTICAL TRANSLATOR: Only alert if it's a major delay (Category 2, 3, or 4)
                     if delay_category >= 2:
-                        # Extract the human-readable description (e.g., "Stationary traffic", "Roadworks")
                         description = "Unknown obstruction"
-                        if "events" in incident and len(incident["events"]) > 0:
-                            description = incident["events"][0].get("description", "Unknown obstruction")
+                        if "events" in properties and len(properties["events"]) > 0:
+                            description = properties["events"][0].get("description", "Unknown obstruction")
                         
+                        # NEW: Extract the road geometry
+                        formatted_path = []
+                        if "geometry" in incident and "coordinates" in incident["geometry"]:
+                            # TomTom gives us [longitude, latitude]. 
+                            # React Native needs {latitude: Y, longitude: X}. We translate it here.
+                            for point in incident["geometry"]["coordinates"]:
+                                if len(point) == 2:
+                                    formatted_path.append({
+                                        "latitude": point[1],
+                                        "longitude": point[0]
+                                    })
+
                         return {
                             "action": "PLAY_AUDIO",
                             "event_type": "HAZARD",
                             "display_alert": "LIVE HAZARD DETECTED",
-                            "narrative_script": f"Tactical alert. Live data intercept indicates {description} ahead. Prepare for delays or initiate rerouting protocol."
+                            "narrative_script": f"Tactical alert. Live data intercept indicates {description} ahead. Reroute advised.",
+                            "hazard_path": formatted_path # We send the road shape down to the phone!
                         }
         except Exception as e:
             print(f"Surveillance Intercept Failed: {e}")
-            pass # If TomTom fails, silently fall back to standard targeting
+            pass 
 
     # ==========================================
     # 2. TARGET DROP ZONE LOGIC

@@ -10,31 +10,7 @@ async def process_agent_movement(packet: TelemetryPacket):
     lat = clean_data["lat"]
     lon = clean_data["lon"]
 
-# ==========================================
-    # --- SIMULATION OVERRIDE (FOR LOCAL TESTING) ---
-    # ==========================================
-    # Set this to True to test the Memory Bank and Polyline. 
-    # Set back to False when you want live global traffic.
-    RUNNING_SIMULATION = True 
 
-    if RUNNING_SIMULATION:
-        # We generate a fake road shape slightly offset from your current location
-        fake_road_path = [
-            {"latitude": lat + 0.0010, "longitude": lon + 0.0010},
-            {"latitude": lat + 0.0005, "longitude": lon + 0.0005},
-            {"latitude": lat, "longitude": lon}
-        ]
-        
-        return {
-            "action": "PLAY_AUDIO",
-            "event_type": "HAZARD",
-            "display_alert": "SIMULATED HAZARD DETECTED",
-            "narrative_script": "Tactical alert. Simulated test hazard detected on your route. Initiating memory bank test.",
-            "hazard_path": fake_road_path
-        }
-
-    
-    
     # ==========================================
     # 1. LIVE SURVEILLANCE INTERCEPT (TOMTOM API)
     # ==========================================

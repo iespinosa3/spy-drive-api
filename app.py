@@ -10,14 +10,13 @@ async def process_agent_movement(packet: TelemetryPacket):
     lat = clean_data["lat"]
     lon = clean_data["lon"]
 
-
     # ==========================================
     # 1. LIVE SURVEILLANCE INTERCEPT (TOMTOM API)
     # ==========================================
-    if TOMTOM_API_KEY != "USByChd1hxLlX6SGEYQWLjRe0xb2JI5X":
+    # FIXED: Now it simply checks if a key exists
+    if TOMTOM_API_KEY:
         bbox = get_bounding_box(lat, lon, RADAR_RADIUS_METERS)
         
-        # UPDATED: We added 'geometry{type,coordinates}' to the fields request!
         fields = "{incidents{properties{iconCategory,magnitudeOfDelay,events{description}},geometry{type,coordinates}}}"
         tomtom_url = f"https://api.tomtom.com/traffic/services/5/incidentDetails?key={TOMTOM_API_KEY}&bbox={bbox}&fields={fields}&language=en-US"
         
@@ -27,7 +26,6 @@ async def process_agent_movement(packet: TelemetryPacket):
                 data = response.json()
                 
                 if "incidents" in data and len(data["incidents"]) > 0:
-                    # Grab the closest incident
                     incident = data["incidents"][0]
                     properties = incident.get("properties", {})
                     delay_category = properties.get("magnitudeOfDelay", 0)
@@ -37,11 +35,8 @@ async def process_agent_movement(packet: TelemetryPacket):
                         if "events" in properties and len(properties["events"]) > 0:
                             description = properties["events"][0].get("description", "Unknown obstruction")
                         
-                        # NEW: Extract the road geometry
                         formatted_path = []
                         if "geometry" in incident and "coordinates" in incident["geometry"]:
-                            # TomTom gives us [longitude, latitude]. 
-                            # React Native needs {latitude: Y, longitude: X}. We translate it here.
                             for point in incident["geometry"]["coordinates"]:
                                 if len(point) == 2:
                                     formatted_path.append({
@@ -54,7 +49,7 @@ async def process_agent_movement(packet: TelemetryPacket):
                             "event_type": "HAZARD",
                             "display_alert": "LIVE HAZARD DETECTED",
                             "narrative_script": f"Tactical alert. Live data intercept indicates {description} ahead. Reroute advised.",
-                            "hazard_path": formatted_path # We send the road shape down to the phone!
+                            "hazard_path": formatted_path 
                         }
         except Exception as e:
             print(f"Surveillance Intercept Failed: {e}")

@@ -58,7 +58,7 @@ async def process_agent_movement(packet: TelemetryPacket):
     # --- SIMULATION OVERRIDE (FOR LOCAL TESTING) ---
     # ==========================================
     # Change to False when you want live TomTom data
-    RUNNING_SIMULATION = True 
+    RUNNING_SIMULATION = False 
 
     if RUNNING_SIMULATION:
         fake_road_path = [

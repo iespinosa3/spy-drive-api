@@ -1,3 +1,47 @@
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel, Field
+import math
+import requests
+from typing import Optional
+from security_gateway import SecurityGateway
+
+# THIS IS THE LINE THAT WAS MISSING!
+app = FastAPI(title="Spy Drive Tactical API", version="2.0.0")
+
+# --- GLOBAL INTELLIGENCE CONFIG ---
+TOMTOM_API_KEY = "USByChd1hxLlX6SGEYQWLjRe0xb2JI5X"
+TRIGGER_RADIUS_METERS = 30 
+RADAR_RADIUS_METERS = 8000 # ~5 miles
+
+class TelemetryPacket(BaseModel):
+    agent_id: str = Field(..., example="Agent007")
+    latitude: float = Field(..., example=33.891)
+    longitude: float = Field(..., example=-84.519)
+    target_lat: Optional[float] = None
+    target_lon: Optional[float] = None
+
+def calculate_distance(lat1, lon1, lat2, lon2):
+    R = 6371e3 
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    delta_phi = math.radians(lat2 - lat1)
+    delta_lambda = math.radians(lon2 - lon1)
+    a = math.sin(delta_phi/2.0)**2 + math.cos(phi1) * math.cos(phi2) * math.sin(delta_lambda/2.0)**2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+    return R * c
+
+def get_bounding_box(lat, lon, radius_meters):
+    # 1 degree of latitude is roughly 111,000 meters
+    lat_offset = radius_meters / 111000.0
+    lon_offset = radius_meters / (111000.0 * math.cos(math.radians(lat)))
+    
+    min_lon = lon - lon_offset
+    min_lat = lat - lat_offset
+    max_lon = lon + lon_offset
+    max_lat = lat + lat_offset
+    
+    return f"{min_lon},{min_lat},{max_lon},{max_lat}"
+
 @app.post("/api/v1/telemetry")
 async def process_agent_movement(packet: TelemetryPacket):
     validation = SecurityGateway.validate_telemetry(
@@ -11,9 +55,29 @@ async def process_agent_movement(packet: TelemetryPacket):
     lon = clean_data["lon"]
 
     # ==========================================
+    # --- SIMULATION OVERRIDE (FOR LOCAL TESTING) ---
+    # ==========================================
+    # Change to False when you want live TomTom data
+    RUNNING_SIMULATION = True 
+
+    if RUNNING_SIMULATION:
+        fake_road_path = [
+            {"latitude": lat + 0.0010, "longitude": lon + 0.0010},
+            {"latitude": lat + 0.0005, "longitude": lon + 0.0005},
+            {"latitude": lat, "longitude": lon}
+        ]
+        
+        return {
+            "action": "PLAY_AUDIO",
+            "event_type": "HAZARD",
+            "display_alert": "SIMULATED HAZARD DETECTED",
+            "narrative_script": "Tactical alert. Simulated test hazard detected on your route. Initiating memory bank test.",
+            "hazard_path": fake_road_path
+        }
+
+    # ==========================================
     # 1. LIVE SURVEILLANCE INTERCEPT (TOMTOM API)
     # ==========================================
-    # FIXED: Now it simply checks if a key exists
     if TOMTOM_API_KEY:
         bbox = get_bounding_box(lat, lon, RADAR_RADIUS_METERS)
         

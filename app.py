@@ -5,7 +5,6 @@ import requests
 from typing import Optional
 from security_gateway import SecurityGateway
 
-# THIS IS THE LINE THAT WAS MISSING!
 app = FastAPI(title="Spy Drive Tactical API", version="2.0.0")
 
 # --- GLOBAL INTELLIGENCE CONFIG ---
@@ -19,6 +18,7 @@ class TelemetryPacket(BaseModel):
     longitude: float = Field(..., example=-84.519)
     target_lat: Optional[float] = None
     target_lon: Optional[float] = None
+    mission_profile: Optional[str] = "DEFAULT" # Receives the mission type
 
 def calculate_distance(lat1, lon1, lat2, lon2):
     R = 6371e3 
@@ -31,7 +31,6 @@ def calculate_distance(lat1, lon1, lat2, lon2):
     return R * c
 
 def get_bounding_box(lat, lon, radius_meters):
-    # 1 degree of latitude is roughly 111,000 meters
     lat_offset = radius_meters / 111000.0
     lon_offset = radius_meters / (111000.0 * math.cos(math.radians(lat)))
     
@@ -53,34 +52,41 @@ async def process_agent_movement(packet: TelemetryPacket):
     clean_data = validation["data"]
     lat = clean_data["lat"]
     lon = clean_data["lon"]
+    profile = packet.mission_profile
 
-    # ==========================================
-    # --- SIMULATION OVERRIDE (FOR LOCAL TESTING) ---
-    # ==========================================
-    # Change to False when you want live TomTom data
-    RUNNING_SIMULATION = False 
-
-    if RUNNING_SIMULATION:
-        fake_road_path = [
-            {"latitude": lat + 0.0010, "longitude": lon + 0.0010},
-            {"latitude": lat + 0.0005, "longitude": lon + 0.0005},
-            {"latitude": lat, "longitude": lon}
-        ]
-        
-        return {
-            "action": "PLAY_AUDIO",
-            "event_type": "HAZARD",
-            "display_alert": "SIMULATED HAZARD DETECTED",
-            "narrative_script": "Tactical alert. Simulated test hazard detected on your route. Initiating memory bank test.",
-            "hazard_path": fake_road_path
+    # --- THE NARRATIVE STORYBOARD DICTIONARY ---
+    MISSION_SCRIPTS = {
+        "DEFAULT": {
+            "hazard": "Tactical alert, {agent}. Live data intercept indicates {obstruction} ahead. Reroute advised.",
+            "arrival": "{agent}, perimeter breached. Secure the area and await the payload."
+        },
+        "SUPPLY_RUN": {
+            "hazard": "Supply route compromised, {agent}. Intercept indicates {obstruction}. Adjusting approach vector to preserve rations.",
+            "arrival": "Supply depot reached, {agent}. Secure the perimeter, acquire rations, and exfiltrate cleanly."
+        },
+        "COURIER": {
+            "hazard": "Courier route obstructed by {obstruction}. Time is a factor, {agent}. Rerouting to ensure asset delivery.",
+            "arrival": "Dead drop reached, {agent}. Transfer the asset and clear the zone immediately."
+        },
+        "COVER": {
+            "hazard": "Civilian traffic anomaly detected: {obstruction}. Maintain cover profile while navigating the delay, {agent}.",
+            "arrival": "Primary cover location reached. Blend in, {agent}. Uplink suspended until shift concludes."
+        },
+        "SAFEHOUSE": {
+            "hazard": "Approach vector compromised. {obstruction} detected. Do not draw attention on your final approach, {agent}.",
+            "arrival": "Safehouse reached. Secure the vehicle, {agent}, sweep the perimeter, and lay low."
         }
+    }
 
+    current_scripts = MISSION_SCRIPTS.get(profile, MISSION_SCRIPTS["DEFAULT"])
+    
     # ==========================================
     # 1. LIVE SURVEILLANCE INTERCEPT (TOMTOM API)
     # ==========================================
-    if TOMTOM_API_KEY:
+    if TOMTOM_API_KEY: # FIXED: Only checks if key exists
         bbox = get_bounding_box(lat, lon, RADAR_RADIUS_METERS)
         
+        # FIXED: Added geometry request back to fields
         fields = "{incidents{properties{iconCategory,magnitudeOfDelay,events{description}},geometry{type,coordinates}}}"
         tomtom_url = f"https://api.tomtom.com/traffic/services/5/incidentDetails?key={TOMTOM_API_KEY}&bbox={bbox}&fields={fields}&language=en-US"
         
@@ -99,6 +105,7 @@ async def process_agent_movement(packet: TelemetryPacket):
                         if "events" in properties and len(properties["events"]) > 0:
                             description = properties["events"][0].get("description", "Unknown obstruction")
                         
+                        # FIXED: Restored the code to extract road geometry
                         formatted_path = []
                         if "geometry" in incident and "coordinates" in incident["geometry"]:
                             for point in incident["geometry"]["coordinates"]:
@@ -112,7 +119,10 @@ async def process_agent_movement(packet: TelemetryPacket):
                             "action": "PLAY_AUDIO",
                             "event_type": "HAZARD",
                             "display_alert": "LIVE HAZARD DETECTED",
-                            "narrative_script": f"Tactical alert. Live data intercept indicates {description} ahead. Reroute advised.",
+                            "narrative_script": current_scripts["hazard"].format(
+                                agent=packet.agent_id, 
+                                obstruction=description
+                            ),
                             "hazard_path": formatted_path 
                         }
         except Exception as e:
@@ -126,7 +136,7 @@ async def process_agent_movement(packet: TelemetryPacket):
         return {
             "action": "KEEP_MOVING",
             "display_alert": "AWAITING TARGET COORDINATES",
-            "narrative_script": None
+            "narrative_script": None # FIXED: Removed accidental script format
         }
 
     distance = calculate_distance(lat, lon, packet.target_lat, packet.target_lon)
@@ -136,7 +146,9 @@ async def process_agent_movement(packet: TelemetryPacket):
             "action": "PLAY_AUDIO",
             "event_type": "TARGET_REACHED",
             "display_alert": "DROP ZONE REACHED",
-            "narrative_script": "Perimeter breached. Secure the area and await the payload."
+            "narrative_script": current_scripts["arrival"].format(
+                agent=packet.agent_id
+            )
         }
     else:
         return {

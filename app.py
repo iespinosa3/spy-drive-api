@@ -10,30 +10,13 @@ app = FastAPI(title="Spy Drive Tactical API", version="2.0.0")
 # --- GLOBAL INTELLIGENCE CONFIG ---
 TOMTOM_API_KEY = "USByChd1hxLlX6SGEYQWLjRe0xb2JI5X"
 TRIGGER_RADIUS_METERS = 30 
-RADAR_RADIUS_METERS = 8000 # ~5 miles
+RADAR_RADIUS_METERS = 8000
+PROXIMITY_RADIUS_METERS = 50 
 
-PROXIMITY_RADIUS_METERS = 50 # Trigger distance for a supply drop (approx 160 feet)
-
-# --- THE LOCAL GEOFENCE (SMYRNA SECTOR) ---
 SUPPLY_DROPS = [
-    {
-        "id": "drop_1", 
-        "lat": 33.8843, "lon": -84.5161, # Smyrna Market Village
-        "type": "Untraceable Currency", 
-        "description": "Untraceable currency drop available."
-    },
-    {
-        "id": "drop_2", 
-        "lat": 33.8964, "lon": -84.5186, # Rev Coffee
-        "type": "Stimulant Cache", 
-        "description": "High-grade stimulant cache detected."
-    },
-    {
-        "id": "drop_3", 
-        "lat": 33.8741, "lon": -84.5020, # QuikTrip Atlanta Rd
-        "type": "Fuel Depot", 
-        "description": "Local fuel reserves located."
-    }
+    {"id": "drop_1", "lat": 33.8843, "lon": -84.5161, "type": "Untraceable Currency", "description": "Untraceable currency drop available."},
+    {"id": "drop_2", "lat": 33.8964, "lon": -84.5186, "type": "Stimulant Cache", "description": "High-grade stimulant cache detected."},
+    {"id": "drop_3", "lat": 33.8741, "lon": -84.5020, "type": "Fuel Depot", "description": "Local fuel reserves located."}
 ]
 
 class TelemetryPacket(BaseModel):
@@ -42,7 +25,7 @@ class TelemetryPacket(BaseModel):
     longitude: float = Field(..., example=-84.519)
     target_lat: Optional[float] = None
     target_lon: Optional[float] = None
-    mission_profile: Optional[str] = "DEFAULT" # Receives the mission type
+    mission_profile: Optional[str] = "DEFAULT"
 
 def calculate_distance(lat1, lon1, lat2, lon2):
     R = 6371e3 
@@ -57,142 +40,62 @@ def calculate_distance(lat1, lon1, lat2, lon2):
 def get_bounding_box(lat, lon, radius_meters):
     lat_offset = radius_meters / 111000.0
     lon_offset = radius_meters / (111000.0 * math.cos(math.radians(lat)))
-    
-    min_lon = lon - lon_offset
-    min_lat = lat - lat_offset
-    max_lon = lon + lon_offset
-    max_lat = lat + lat_offset
-    
-    return f"{min_lon},{min_lat},{max_lon},{max_lat}"
+    return f"{lon - lon_offset},{lat - lat_offset},{lon + lon_offset},{lat + lat_offset}"
+
+def get_road_route(lat1, lon1, lat2, lon2):
+    url = f"http://router.project-osrm.org/route/v1/driving/{lon1},{lat1};{lon2},{lat2}?overview=full&geometries=geojson"
+    try:
+        response = requests.get(url, timeout=5)
+        if response.status_code == 200:
+            coords = response.json()['routes'][0]['geometry']['coordinates']
+            return [{"latitude": c[1], "longitude": c[0]} for c in coords]
+    except Exception as e:
+        print(f"Routing error: {e}")
+    return None
 
 @app.post("/api/v1/telemetry")
 async def process_agent_movement(packet: TelemetryPacket):
-    validation = SecurityGateway.validate_telemetry(
-        packet.latitude, packet.longitude, packet.agent_id
-    )
+    validation = SecurityGateway.validate_telemetry(packet.latitude, packet.longitude, packet.agent_id)
     if validation["status"] == "REJECTED":
         raise HTTPException(status_code=400, detail=validation["reason"])
     
-    clean_data = validation["data"]
-    lat = clean_data["lat"]
-    lon = clean_data["lon"]
+    lat, lon = validation["data"]["lat"], validation["data"]["lon"]
     profile = packet.mission_profile
 
-    # --- THE NARRATIVE STORYBOARD DICTIONARY ---
     MISSION_SCRIPTS = {
-        "DEFAULT": {
-            "hazard": "Tactical alert, {agent}. Live data intercept indicates {obstruction} ahead. Reroute advised.",
-            "arrival": "{agent}, perimeter breached. Secure the area and await the payload."
-        },
-        "SUPPLY_RUN": {
-            "hazard": "Supply route compromised, {agent}. Intercept indicates {obstruction}. Adjusting approach vector to preserve rations.",
-            "arrival": "Supply depot reached, {agent}. Secure the perimeter, acquire rations, and exfiltrate cleanly."
-        },
-        "COURIER": {
-            "hazard": "Courier route obstructed by {obstruction}. Time is a factor, {agent}. Rerouting to ensure asset delivery.",
-            "arrival": "Dead drop reached, {agent}. Transfer the asset and clear the zone immediately."
-        },
-        "COVER": {
-            "hazard": "Civilian traffic anomaly detected: {obstruction}. Maintain cover profile while navigating the delay, {agent}.",
-            "arrival": "Primary cover location reached. Blend in, {agent}. Uplink suspended until shift concludes."
-        },
-        "SAFEHOUSE": {
-            "hazard": "Approach vector compromised. {obstruction} detected. Do not draw attention on your final approach, {agent}.",
-            "arrival": "Safehouse reached. Secure the vehicle, {agent}, sweep the perimeter, and lay low."
-        }
+        "DEFAULT": {"hazard": "Tactical alert, {agent}. Intercept indicates {obstruction} ahead.", "arrival": "{agent}, perimeter breached."},
+        "SUPPLY_RUN": {"hazard": "{agent}, supply route compromised by {obstruction}.", "arrival": "Supply depot reached, {agent}."},
+        "COURIER": {"hazard": "Courier route obstructed by {obstruction}, {agent}.", "arrival": "Dead drop reached, {agent}."},
+        "COVER": {"hazard": "Civilian traffic anomaly: {obstruction}, {agent}.", "arrival": "Cover location reached, {agent}."},
+        "SAFEHOUSE": {"hazard": "Approach compromised by {obstruction}, {agent}.", "arrival": "Safehouse reached, {agent}."}
     }
-
     current_scripts = MISSION_SCRIPTS.get(profile, MISSION_SCRIPTS["DEFAULT"])
-    
-    # ==========================================
-    # 1. LIVE SURVEILLANCE INTERCEPT (TOMTOM API)
-    # ==========================================
-    if TOMTOM_API_KEY: # FIXED: Only checks if key exists
-        bbox = get_bounding_box(lat, lon, RADAR_RADIUS_METERS)
-        
-        # FIXED: Added geometry request back to fields
-        fields = "{incidents{properties{iconCategory,magnitudeOfDelay,events{description}},geometry{type,coordinates}}}"
-        tomtom_url = f"https://api.tomtom.com/traffic/services/5/incidentDetails?key={TOMTOM_API_KEY}&bbox={bbox}&fields={fields}&language=en-US"
-        
+
+    # 1. LIVE SURVEILLANCE
+    if TOMTOM_API_KEY:
         try:
-            response = requests.get(tomtom_url, timeout=3)
-            if response.status_code == 200:
-                data = response.json()
-                
-                if "incidents" in data and len(data["incidents"]) > 0:
-                    incident = data["incidents"][0]
-                    properties = incident.get("properties", {})
-                    delay_category = properties.get("magnitudeOfDelay", 0)
-                    
-                    if delay_category >= 2:
-                        description = "Unknown obstruction"
-                        if "events" in properties and len(properties["events"]) > 0:
-                            description = properties["events"][0].get("description", "Unknown obstruction")
-                        
-                        # FIXED: Restored the code to extract road geometry
-                        formatted_path = []
-                        if "geometry" in incident and "coordinates" in incident["geometry"]:
-                            for point in incident["geometry"]["coordinates"]:
-                                if len(point) == 2:
-                                    formatted_path.append({
-                                        "latitude": point[1],
-                                        "longitude": point[0]
-                                    })
+            url = f"https://api.tomtom.com/traffic/services/5/incidentDetails?key={TOMTOM_API_KEY}&bbox={get_bounding_box(lat, lon, RADAR_RADIUS_METERS)}&fields={{incidents{{properties{{magnitudeOfDelay,events{{description}}}},geometry{{coordinates}}}}}}"
+            response = requests.get(url, timeout=3)
+            if response.status_code == 200 and "incidents" in response.json():
+                incidents = response.json()["incidents"]
+                if incidents and incidents[0]["properties"].get("magnitudeOfDelay", 0) >= 2:
+                    desc = incidents[0]["properties"]["events"][0].get("description", "obstruction")
+                    path = [{"latitude": p[1], "longitude": p[0]} for p in incidents[0]["geometry"]["coordinates"]]
+                    return {"action": "PLAY_AUDIO", "event_type": "HAZARD", "display_alert": "LIVE HAZARD", "narrative_script": current_scripts["hazard"].format(agent=packet.agent_id, obstruction=desc), "hazard_path": path}
+        except: pass
 
-                        return {
-                            "action": "PLAY_AUDIO",
-                            "event_type": "HAZARD",
-                            "display_alert": "LIVE HAZARD DETECTED",
-                            "narrative_script": current_scripts["hazard"].format(
-                                agent=packet.agent_id, 
-                                obstruction=description
-                            ),
-                            "hazard_path": formatted_path 
-                        }
-        except Exception as e:
-            print(f"Surveillance Intercept Failed: {e}")
-            pass 
-
-    # ==========================================
-    # 2. TARGET DROP ZONE LOGIC
-    # ==========================================
+    # 2. TARGET DROP ZONE
     if packet.target_lat is None or packet.target_lon is None:
-        return {
-            "action": "KEEP_MOVING",
-            "display_alert": "AWAITING TARGET COORDINATES",
-            "narrative_script": None # FIXED: Removed accidental script format
-        }
+        return {"action": "KEEP_MOVING", "display_alert": "AWAITING TARGET", "narrative_script": None, "route": None}
 
-    distance = calculate_distance(lat, lon, packet.target_lat, packet.target_lon)
-    
-    if distance <= TRIGGER_RADIUS_METERS:
-        return {
-            "action": "PLAY_AUDIO",
-            "event_type": "TARGET_REACHED",
-            "display_alert": "DROP ZONE REACHED",
-            "narrative_script": current_scripts["arrival"].format(
-                agent=packet.agent_id
-            )
-        }
-    else:# ==========================================
-    # 3. PROXIMITY RADAR (SUPPLY DROPS)
-    # ==========================================
-     for drop in SUPPLY_DROPS:
-        drop_dist = calculate_distance(lat, lon, drop["lat"], drop["lon"])
-        if drop_dist <= PROXIMITY_RADIUS_METERS:
-            return {
-                "action": "PLAY_AUDIO",
-                "event_type": "SUPPLY_DROP",
-                "display_alert": f"ASSET DETECTED: {drop['type'].upper()}",
-                "narrative_script": f"Tactical radar ping. {packet.agent_id}, {drop['description']} Proceed if rations are required."
-                # NEW: Send the coordinates to the phone so it can reroute!
-                "drop_lat": drop["lat"],
-                "drop_lon": drop["lon"]
-            }
+    dist = calculate_distance(lat, lon, packet.target_lat, packet.target_lon)
+    if dist <= TRIGGER_RADIUS_METERS:
+        return {"action": "PLAY_AUDIO", "event_type": "TARGET_REACHED", "display_alert": "DROP ZONE REACHED", "narrative_script": current_scripts["arrival"].format(agent=packet.agent_id), "route": None}
 
-    # If no hazards, no targets, and no supply drops:
-    return {
-        "action": "KEEP_MOVING",
-        "display_alert": f"TARGET: {int(distance)} METERS" if packet.target_lat else "AWAITING TARGET COORDINATES"
-    }
+    # 3. PROXIMITY RADAR
+    for drop in SUPPLY_DROPS:
+        if calculate_distance(lat, lon, drop["lat"], drop["lon"]) <= PROXIMITY_RADIUS_METERS:
+            return {"action": "PLAY_AUDIO", "event_type": "SUPPLY_DROP", "display_alert": f"ASSET: {drop['type'].upper()}", "narrative_script": f"Tactical radar ping. {packet.agent_id}, {drop['description']}", "drop_lat": drop["lat"], "drop_lon": drop["lon"]}
+
+    return {"action": "KEEP_MOVING", "display_alert": f"TARGET: {int(dist)} METERS", "route": get_road_route(lat, lon, packet.target_lat, packet.target_lon)}
   

@@ -67,9 +67,9 @@ def get_road_route(lat1, lon1, lat2, lon2):
 
 @app.post("/api/v1/telemetry")
 async def process_agent_movement(packet: TelemetryPacket):
-    validation = SecurityGateway.validate_telemetry(packet.latitude, packet.longitude, packet.agent_id)
-    if validation["status"] == "REJECTED":
-        raise HTTPException(status_code=400, detail=validation["reason"])
+ #   validation = SecurityGateway.validate_telemetry(packet.latitude, packet.longitude, packet.agent_id)
+  #  if validation["status"] == "REJECTED":
+ #       raise HTTPException(status_code=400, detail=validation["reason"])
     
     lat, lon = validation["data"]["lat"], validation["data"]["lon"]
     

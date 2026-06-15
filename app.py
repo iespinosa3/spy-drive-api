@@ -56,27 +56,39 @@ async def process_agent_movement(packet: TelemetryPacket):
     
     lat, lon = validation["data"]["lat"], validation["data"]["lon"]
     
-    # Calculate route if target exists, default to empty list
+    # DEBUG: Force print coordinates
+    print(f"DEBUG: Agent at {lat},{lon} targeting {packet.target_lat},{packet.target_lon}")
+    
     route_path = get_road_route(lat, lon, packet.target_lat, packet.target_lon) if packet.target_lat else []
+    
+    # DEBUG: Check if OSRM returned data
+    print(f"DEBUG: Route points found: {len(route_path)}")
 
-    # Check Supply Drops
+    # Prepare response
+    response = None
+
+    # Logic Branching
     for drop in SUPPLY_DROPS:
         if calculate_distance(lat, lon, drop["lat"], drop["lon"]) <= PROXIMITY_RADIUS_METERS:
-            return {
+            response = {
                 "action": "PLAY_AUDIO", "event_type": "SUPPLY_DROP",
                 "display_alert": f"ASSET: {drop['type'].upper()}",
                 "narrative_script": f"Tactical radar ping. {packet.agent_id}, {drop['description']}",
                 "drop_lat": drop["lat"], "drop_lon": drop["lon"], "route": route_path
             }
+            break
 
-    # Check Target Arrival
-    if packet.target_lat and calculate_distance(lat, lon, packet.target_lat, packet.target_lon) <= TRIGGER_RADIUS_METERS:
-        return {"action": "PLAY_AUDIO", "event_type": "TARGET_REACHED", "display_alert": "DROP ZONE REACHED", "route": route_path}
+    if not response and packet.target_lat and calculate_distance(lat, lon, packet.target_lat, packet.target_lon) <= TRIGGER_RADIUS_METERS:
+        response = {"action": "PLAY_AUDIO", "event_type": "TARGET_REACHED", "display_alert": "DROP ZONE REACHED", "route": route_path}
+    
+    if not response:
+        dist = int(calculate_distance(lat, lon, packet.target_lat, packet.target_lon)) if packet.target_lat else 0
+        response = {
+            "action": "KEEP_MOVING",
+            "display_alert": f"TARGET: {dist} METERS" if packet.target_lat else "AWAITING TARGET",
+            "route": route_path
+        }
 
-    # Default
-    dist = int(calculate_distance(lat, lon, packet.target_lat, packet.target_lon)) if packet.target_lat else 0
-    return {
-        "action": "KEEP_MOVING",
-        "display_alert": f"TARGET: {dist} METERS" if packet.target_lat else "AWAITING TARGET",
-        "route": route_path
-    }
+    # DEBUG: Print the payload being sent
+    print(f"DEBUG: Sending response to phone with route length: {len(response.get('route', []))}")
+    return response

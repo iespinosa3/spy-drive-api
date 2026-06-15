@@ -12,6 +12,30 @@ TOMTOM_API_KEY = "USByChd1hxLlX6SGEYQWLjRe0xb2JI5X"
 TRIGGER_RADIUS_METERS = 30 
 RADAR_RADIUS_METERS = 8000 # ~5 miles
 
+PROXIMITY_RADIUS_METERS = 50 # Trigger distance for a supply drop (approx 160 feet)
+
+# --- THE LOCAL GEOFENCE (SMYRNA SECTOR) ---
+SUPPLY_DROPS = [
+    {
+        "id": "drop_1", 
+        "lat": 33.8843, "lon": -84.5161, # Smyrna Market Village
+        "type": "Untraceable Currency", 
+        "description": "Untraceable currency drop available."
+    },
+    {
+        "id": "drop_2", 
+        "lat": 33.8964, "lon": -84.5186, # Rev Coffee
+        "type": "Stimulant Cache", 
+        "description": "High-grade stimulant cache detected."
+    },
+    {
+        "id": "drop_3", 
+        "lat": 33.8741, "lon": -84.5020, # QuikTrip Atlanta Rd
+        "type": "Fuel Depot", 
+        "description": "Local fuel reserves located."
+    }
+]
+
 class TelemetryPacket(BaseModel):
     agent_id: str = Field(..., example="Agent007")
     latitude: float = Field(..., example=33.891)
@@ -150,8 +174,22 @@ async def process_agent_movement(packet: TelemetryPacket):
                 agent=packet.agent_id
             )
         }
-    else:
-        return {
-            "action": "KEEP_MOVING",
-            "display_alert": f"TARGET: {int(distance)} METERS"
-        }
+    else:# ==========================================
+    # 3. PROXIMITY RADAR (SUPPLY DROPS)
+    # ==========================================
+     for drop in SUPPLY_DROPS:
+        drop_dist = calculate_distance(lat, lon, drop["lat"], drop["lon"])
+        if drop_dist <= PROXIMITY_RADIUS_METERS:
+            return {
+                "action": "PLAY_AUDIO",
+                "event_type": "SUPPLY_DROP",
+                "display_alert": f"ASSET DETECTED: {drop['type'].upper()}",
+                "narrative_script": f"Tactical radar ping. {packet.agent_id}, {drop['description']} Proceed if rations are required."
+            }
+
+    # If no hazards, no targets, and no supply drops:
+    return {
+        "action": "KEEP_MOVING",
+        "display_alert": f"TARGET: {int(distance)} METERS" if packet.target_lat else "AWAITING TARGET COORDINATES"
+    }
+  

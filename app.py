@@ -60,42 +60,32 @@ async def process_agent_movement(packet: TelemetryPacket):
         raise HTTPException(status_code=400, detail=validation["reason"])
     
     lat, lon = validation["data"]["lat"], validation["data"]["lon"]
-    profile = packet.mission_profile
+    
+    # 1. ALWAYS CALCULATE ROUTE IF TARGET EXISTS
+    route_path = None
+    if packet.target_lat and packet.target_lon:
+        route_path = get_road_route(lat, lon, packet.target_lat, packet.target_lon)
 
-    MISSION_SCRIPTS = {
-        "DEFAULT": {"hazard": "Tactical alert, {agent}. Intercept indicates {obstruction} ahead.", "arrival": "{agent}, perimeter breached."},
-        "SUPPLY_RUN": {"hazard": "{agent}, supply route compromised by {obstruction}.", "arrival": "Supply depot reached, {agent}."},
-        "COURIER": {"hazard": "Courier route obstructed by {obstruction}, {agent}.", "arrival": "Dead drop reached, {agent}."},
-        "COVER": {"hazard": "Civilian traffic anomaly: {obstruction}, {agent}.", "arrival": "Cover location reached, {agent}."},
-        "SAFEHOUSE": {"hazard": "Approach compromised by {obstruction}, {agent}.", "arrival": "Safehouse reached, {agent}."}
-    }
-    current_scripts = MISSION_SCRIPTS.get(profile, MISSION_SCRIPTS["DEFAULT"])
-
-    # 1. LIVE SURVEILLANCE
-    if TOMTOM_API_KEY:
-        try:
-            url = f"https://api.tomtom.com/traffic/services/5/incidentDetails?key={TOMTOM_API_KEY}&bbox={get_bounding_box(lat, lon, RADAR_RADIUS_METERS)}&fields={{incidents{{properties{{magnitudeOfDelay,events{{description}}}},geometry{{coordinates}}}}}}"
-            response = requests.get(url, timeout=3)
-            if response.status_code == 200 and "incidents" in response.json():
-                incidents = response.json()["incidents"]
-                if incidents and incidents[0]["properties"].get("magnitudeOfDelay", 0) >= 2:
-                    desc = incidents[0]["properties"]["events"][0].get("description", "obstruction")
-                    path = [{"latitude": p[1], "longitude": p[0]} for p in incidents[0]["geometry"]["coordinates"]]
-                    return {"action": "PLAY_AUDIO", "event_type": "HAZARD", "display_alert": "LIVE HAZARD", "narrative_script": current_scripts["hazard"].format(agent=packet.agent_id, obstruction=desc), "hazard_path": path}
-        except: pass
-
-    # 2. TARGET DROP ZONE
-    if packet.target_lat is None or packet.target_lon is None:
-        return {"action": "KEEP_MOVING", "display_alert": "AWAITING TARGET", "narrative_script": None, "route": None}
-
-    dist = calculate_distance(lat, lon, packet.target_lat, packet.target_lon)
-    if dist <= TRIGGER_RADIUS_METERS:
-        return {"action": "PLAY_AUDIO", "event_type": "TARGET_REACHED", "display_alert": "DROP ZONE REACHED", "narrative_script": current_scripts["arrival"].format(agent=packet.agent_id), "route": None}
-
-    # 3. PROXIMITY RADAR
+    # 2. LOGIC BRANCHING
+    # Check Supply Drops first
     for drop in SUPPLY_DROPS:
         if calculate_distance(lat, lon, drop["lat"], drop["lon"]) <= PROXIMITY_RADIUS_METERS:
-            return {"action": "PLAY_AUDIO", "event_type": "SUPPLY_DROP", "display_alert": f"ASSET: {drop['type'].upper()}", "narrative_script": f"Tactical radar ping. {packet.agent_id}, {drop['description']}", "drop_lat": drop["lat"], "drop_lon": drop["lon"]}
+            return {
+                "action": "PLAY_AUDIO", 
+                "event_type": "SUPPLY_DROP", 
+                "display_alert": f"ASSET: {drop['type'].upper()}",
+                "narrative_script": f"Tactical radar ping. {packet.agent_id}, {drop['description']}",
+                "drop_lat": drop["lat"], "drop_lon": drop["lon"],
+                "route": route_path # Attach the route here
+            }
 
-    return {"action": "KEEP_MOVING", "display_alert": f"TARGET: {int(dist)} METERS", "route": get_road_route(lat, lon, packet.target_lat, packet.target_lon)}
-  
+    # Check Target Arrival
+    if packet.target_lat and calculate_distance(lat, lon, packet.target_lat, packet.target_lon) <= TRIGGER_RADIUS_METERS:
+        return {"action": "PLAY_AUDIO", "event_type": "TARGET_REACHED", "display_alert": "DROP ZONE REACHED", "route": route_path}
+
+    # 3. DEFAULT KEEP MOVING STATE
+    return {
+        "action": "KEEP_MOVING",
+        "display_alert": f"TARGET: {int(calculate_distance(lat, lon, packet.target_lat, packet.target_lon))} METERS" if packet.target_lat else "AWAITING TARGET",
+        "route": route_path # Always send the route path
+    }

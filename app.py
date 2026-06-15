@@ -185,6 +185,9 @@ async def process_agent_movement(packet: TelemetryPacket):
                 "event_type": "SUPPLY_DROP",
                 "display_alert": f"ASSET DETECTED: {drop['type'].upper()}",
                 "narrative_script": f"Tactical radar ping. {packet.agent_id}, {drop['description']} Proceed if rations are required."
+                # NEW: Send the coordinates to the phone so it can reroute!
+                "drop_lat": drop["lat"],
+                "drop_lon": drop["lon"]
             }
 
     # If no hazards, no targets, and no supply drops:

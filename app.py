@@ -45,17 +45,18 @@ def get_bounding_box(lat, lon, radius_meters):
 def get_road_route(lat1, lon1, lat2, lon2):
     url = f"http://router.project-osrm.org/route/v1/driving/{lon1},{lat1};{lon2},{lat2}?overview=full&geometries=geojson"
     try:
-        response = requests.get(url, timeout=10) # Increased timeout
-        data = response.json()
-        if response.status_code == 200 and data.get('routes'):
-            coords = data['routes'][0]['geometry']['coordinates']
-            return [{"latitude": c[1], "longitude": c[0]} for c in coords]
-        else:
-            print(f"OSRM FAILED: Status {response.status_code}, Data: {data}")
-            return None
+        # Use a very short timeout
+        response = requests.get(url, timeout=5)
+        if response.status_code == 200:
+            data = response.json()
+            if data.get('routes'):
+                coords = data['routes'][0]['geometry']['coordinates']
+                return [{"latitude": c[1], "longitude": c[0]} for c in coords]
     except Exception as e:
-        print(f"OSRM CRASH: {e}")
-        return None
+        print(f"OSRM Error: {e}")
+    
+    # RETURN EMPTY LIST ON FAILURE - This is the fix!
+    return []
 
 @app.post("/api/v1/telemetry")
 async def process_agent_movement(packet: TelemetryPacket):

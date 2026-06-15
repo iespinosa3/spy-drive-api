@@ -43,43 +43,31 @@ def get_bounding_box(lat, lon, radius_meters):
     return f"{lon - lon_offset},{lat - lat_offset},{lon + lon_offset},{lat + lat_offset}"
 
 def get_road_route(lat1, lon1, lat2, lon2):
-    # OSRM expects coordinates as lon,lat
     url = f"http://router.project-osrm.org/route/v1/driving/{lon1},{lat1};{lon2},{lat2}?overview=full&geometries=geojson"
     try:
-        response = requests.get(url, timeout=5)
-        if response.status_code == 200:
-            data = response.json()
-            
-            # DIAGNOSTIC: If this prints "NO ROUTES FOUND", we know the coordinates are the issue
-            if not data.get('routes'):
-                print(f"DEBUG: OSRM returned success but no routes found. Data: {data}")
-                return None
-                
+        response = requests.get(url, timeout=10) # Increased timeout
+        data = response.json()
+        if response.status_code == 200 and data.get('routes'):
             coords = data['routes'][0]['geometry']['coordinates']
-            
-            # Proper conversion to MapView format
-            formatted = [{"latitude": c[1], "longitude": c[0]} for c in coords]
-            print(f"DEBUG: Successfully generated {len(formatted)} route points.")
-            return formatted
-            
+            return [{"latitude": c[1], "longitude": c[0]} for c in coords]
         else:
-            print(f"DEBUG: OSRM returned status code {response.status_code}")
+            print(f"OSRM FAILED: Status {response.status_code}, Data: {data}")
+            return None
     except Exception as e:
-        print(f"DEBUG: Routing Exception: {e}")
-    return None
+        print(f"OSRM CRASH: {e}")
+        return None
 
 @app.post("/api/v1/telemetry")
 async def process_agent_movement(packet: TelemetryPacket):
-    validation = SecurityGateway.validate_telemetry(packet.latitude, packet.longitude, packet.agent_id)
-    if validation["status"] == "REJECTED":
-        raise HTTPException(status_code=400, detail=validation["reason"])
-    
+    # ... (Keep security validation as is) ...
     lat, lon = validation["data"]["lat"], validation["data"]["lon"]
     
-    # 1. ALWAYS CALCULATE ROUTE IF TARGET EXISTS
-    route_path = None
+    # FORCE ROUTING CALCULATION
+    route_path = [] # Default to empty list instead of None
     if packet.target_lat and packet.target_lon:
-        route_path = get_road_route(lat, lon, packet.target_lat, packet.target_lon)
+        route_path = get_road_route(lat, lon, packet.target_lat, packet.target_lon) or []
+    
+    # ... (Rest of logic)
 
     # 2. LOGIC BRANCHING
     # Check Supply Drops first

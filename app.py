@@ -43,14 +43,29 @@ def get_bounding_box(lat, lon, radius_meters):
     return f"{lon - lon_offset},{lat - lat_offset},{lon + lon_offset},{lat + lat_offset}"
 
 def get_road_route(lat1, lon1, lat2, lon2):
+    # OSRM expects coordinates as lon,lat
     url = f"http://router.project-osrm.org/route/v1/driving/{lon1},{lat1};{lon2},{lat2}?overview=full&geometries=geojson"
     try:
         response = requests.get(url, timeout=5)
         if response.status_code == 200:
-            coords = response.json()['routes'][0]['geometry']['coordinates']
-            return [{"latitude": c[1], "longitude": c[0]} for c in coords]
+            data = response.json()
+            
+            # DIAGNOSTIC: If this prints "NO ROUTES FOUND", we know the coordinates are the issue
+            if not data.get('routes'):
+                print(f"DEBUG: OSRM returned success but no routes found. Data: {data}")
+                return None
+                
+            coords = data['routes'][0]['geometry']['coordinates']
+            
+            # Proper conversion to MapView format
+            formatted = [{"latitude": c[1], "longitude": c[0]} for c in coords]
+            print(f"DEBUG: Successfully generated {len(formatted)} route points.")
+            return formatted
+            
+        else:
+            print(f"DEBUG: OSRM returned status code {response.status_code}")
     except Exception as e:
-        print(f"Routing error: {e}")
+        print(f"DEBUG: Routing Exception: {e}")
     return None
 
 @app.post("/api/v1/telemetry")

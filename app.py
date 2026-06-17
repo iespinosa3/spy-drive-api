@@ -13,10 +13,9 @@ class TelemetryPacket(BaseModel):
     target_lat: Optional[float] = None
     target_lon: Optional[float] = None
     is_off_course: Optional[bool] = False
-    mission_profile: Optional[str] = "DEFAULT"
 
 def get_road_route(lat1, lon1, lat2, lon2):
-    # Standard OSRM production endpoint
+    # Using OSRM (No API Key Required)
     url = f"http://router.project-osrm.org/route/v1/driving/{lon1},{lat1};{lon2},{lat2}?overview=full&geometries=geojson"
     try:
         response = requests.get(url, timeout=5)
@@ -31,17 +30,18 @@ def get_road_route(lat1, lon1, lat2, lon2):
 
 @app.post("/api/v1/telemetry")
 async def process_agent_movement(packet: TelemetryPacket):
-    # Harsh narrative logic based on route deviation
-    narrative = f"Maintain vector, {packet.agent_id}."
+    # GUARDRAIL LOGIC:
+    # Only speak if off-course (60m/200ft threshold)
+    narrative = ""
     if packet.is_off_course:
-        narrative = "You are failing the mission, Agent. Return to the path immediately."
+        narrative = "Course deviation detected. Return to the primary vector immediately."
 
-    # Generate route if target exists
+    # Generate route
     route_path = get_road_route(packet.latitude, packet.longitude, packet.target_lat, packet.target_lon) if packet.target_lat else []
 
     return {
         "action": "KEEP_MOVING",
         "display_alert": "TARGET LOCKED" if packet.target_lat else "AWAITING TARGET",
-        "narrative_script": narrative,
+        "narrative_script": narrative, 
         "route": route_path
     }

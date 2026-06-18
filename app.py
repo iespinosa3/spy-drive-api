@@ -38,20 +38,27 @@ def calculate_distance(lat1, lon1, lat2, lon2):
 
 @app.post("/api/v1/telemetry")
 async def process_agent_movement(packet: TelemetryPacket):
-    # Calculate distance to target in meters
-    dist = calculate_distance(packet.latitude, packet.longitude, packet.target_lat, packet.target_lon) if packet.target_lat else 99999
+    # Calculate distance if a target exists
+    if packet.target_lat:
+        dist = calculate_distance(packet.latitude, packet.longitude, packet.target_lat, packet.target_lon)
+        
+        # If within 100m, notify and clear target
+        if dist <= 100:
+            return {
+                "action": "PLAY_AUDIO",
+                "display_alert": "DESTINATION REACHED",
+                "narrative_script": "Destination reached, Agent.",
+                "route": [], # Clear route
+                "clear_target": True # Signal to app to clear inputs
+            }
+        
+        # Standard route calculation
+        route_path = get_road_route(packet.latitude, packet.longitude, packet.target_lat, packet.target_lon)
+        return {
+            "action": "KEEP_MOVING",
+            "display_alert": f"TARGET: {int(dist)}m",
+            "narrative_script": "",
+            "route": route_path
+        }
     
-    # Check if we arrived (100m threshold)
-    arrived = dist <= 100
-    
-    narrative = "Destination reached, Agent." if arrived else ""
-    alert = "DESTINATION REACHED" if arrived else "EN ROUTE"
-
-    route_path = get_road_route(packet.latitude, packet.longitude, packet.target_lat, packet.target_lon) if packet.target_lat else []
-
-    return {
-        "action": "PLAY_AUDIO" if arrived else "KEEP_MOVING",
-        "display_alert": alert,
-        "narrative_script": narrative,
-        "route": route_path
-    }
+    return {"action": "KEEP_MOVING", "display_alert": "AWAITING TARGET", "route": []}

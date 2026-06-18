@@ -28,20 +28,30 @@ def get_road_route(lat1, lon1, lat2, lon2):
         pass
     return []
 
+def calculate_distance(lat1, lon1, lat2, lon2):
+    R = 6371e3  # Earth's radius in meters
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    delta_phi = math.radians(lat2 - lat1)
+    delta_lambda = math.radians(lon2 - lon1)
+    a = math.sin(delta_phi/2.0)**2 + math.cos(phi1) * math.cos(phi2) * math.sin(delta_lambda/2.0)**2
+    return R * (2 * math.atan2(math.sqrt(a), math.sqrt(1-a)))
+
 @app.post("/api/v1/telemetry")
 async def process_agent_movement(packet: TelemetryPacket):
-    # GUARDRAIL LOGIC:
-    # Only speak if off-course (60m/200ft threshold)
-    narrative = ""
-    if packet.is_off_course:
-        narrative = "Course deviation detected. Return to the primary vector immediately."
+    # Calculate distance to target in meters
+    dist = calculate_distance(packet.latitude, packet.longitude, packet.target_lat, packet.target_lon) if packet.target_lat else 99999
+    
+    # Check if we arrived (100m threshold)
+    arrived = dist <= 100
+    
+    narrative = "Destination reached, Agent." if arrived else ""
+    alert = "DESTINATION REACHED" if arrived else "EN ROUTE"
 
-    # Generate route
     route_path = get_road_route(packet.latitude, packet.longitude, packet.target_lat, packet.target_lon) if packet.target_lat else []
 
     return {
-        "action": "KEEP_MOVING",
-        "display_alert": "TARGET LOCKED" if packet.target_lat else "AWAITING TARGET",
-        "narrative_script": narrative, 
+        "action": "PLAY_AUDIO" if arrived else "KEEP_MOVING",
+        "display_alert": alert,
+        "narrative_script": narrative,
         "route": route_path
     }

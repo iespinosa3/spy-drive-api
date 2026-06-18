@@ -1,10 +1,17 @@
 from fastapi import FastAPI, HTTPException
 import math
 import requests
+import random
 from typing import Optional
 from pydantic import BaseModel, Field
 
 app = FastAPI(title="Spy Drive Tactical API", version="3.0.0")
+
+STORYLINE_EVENTS = [
+    {"type": "HAZARD", "description": "Police unit reported ahead. Maintain low profile."},
+    {"type": "HAZARD", "description": "Surveillance detected. Keep moving, do not linger."},
+    {"type": "INTEL", "description": "Package secure. Proceed to extraction."}
+]
 
 class TelemetryPacket(BaseModel):
     agent_id: str
@@ -38,27 +45,35 @@ def calculate_distance(lat1, lon1, lat2, lon2):
 
 @app.post("/api/v1/telemetry")
 async def process_agent_movement(packet: TelemetryPacket):
+    # If no target exists, fall back to default awaiting state
+    if packet.target_lat is None or packet.target_lon is None:
+        return {"action": "KEEP_MOVING", "display_alert": "AWAITING TARGET", "route": []}
+
     # Calculate distance if a target exists
-    if packet.target_lat:
-        dist = calculate_distance(packet.latitude, packet.longitude, packet.target_lat, packet.target_lon)
-        
-        # If within 100m, notify and clear target
-        if dist <= 100:
-            return {
-                "action": "PLAY_AUDIO",
-                "display_alert": "DESTINATION REACHED",
-                "narrative_script": "Destination reached, Agent.",
-                "route": [], # Clear route
-                "clear_target": True # Signal to app to clear inputs
-            }
-        
-        # Standard route calculation
-        route_path = get_road_route(packet.latitude, packet.longitude, packet.target_lat, packet.target_lon)
+    dist = calculate_distance(packet.latitude, packet.longitude, packet.target_lat, packet.target_lon)
+    
+    # If within 100m, notify and clear target
+    if dist <= 100:
         return {
-            "action": "KEEP_MOVING",
-            "display_alert": f"TARGET: {int(dist)}m",
-            "narrative_script": "",
-            "route": route_path
+            "action": "PLAY_AUDIO",
+            "display_alert": "DESTINATION REACHED",
+            "narrative_script": "Destination reached, Agent.",
+            "route": [], # Clear route
+            "clear_target": True # Signal to app to clear inputs
         }
     
-    return {"action": "KEEP_MOVING", "display_alert": "AWAITING TARGET", "route": []}
+    # Standard route calculation
+    route_path = get_road_route(packet.latitude, packet.longitude, packet.target_lat, packet.target_lon)
+
+    # Inject Storyline (Randomized Event Engine)
+    # Only trigger a storyline event 5% of the time while en route
+    event = None
+    if random.random() < 0.05:
+        event = random.choice(STORYLINE_EVENTS)
+
+    return {
+        "action": "PLAY_AUDIO" if event else "KEEP_MOVING",
+        "display_alert": event["type"] if event else f"TARGET: {int(dist)}m",
+        "narrative_script": event["description"] if event else "",
+        "route": route_path
+    }

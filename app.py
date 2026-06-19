@@ -4,38 +4,14 @@ import requests
 import random
 from typing import Optional
 from pydantic import BaseModel, Field
-from security_gateway import SecurityGateway
 
 app = FastAPI(title="Spy Drive Tactical API", version="3.0.0")
 
-# --- MISSION SPECIFIC STORYLINE EVENT POOLS ---
-MISSION_STORIES = {
-    "DEFAULT": [
-        {"type": "HAZARD", "description": "Police unit reported ahead. Maintain low profile."},
-        {"type": "HAZARD", "description": "Surveillance detected. Keep moving, do not linger."},
-        {"type": "INTEL", "description": "Covert objective updated. Proceed with extreme caution."}
-    ],
-    "SUPPLY_RUN": [
-        {"type": "HAZARD", "description": "Supply route compromised. Reroute if intercepted."},
-        {"type": "INTEL", "description": "Cache secured. Log coordinates and proceed."},
-        {"type": "SUPPLY_RUN", "description": "High-grade stimulant cache detected nearby."}
-    ],
-    "COURIER": [
-        {"type": "HAZARD", "description": "Hostile tail detected. Shake them before drop off."},
-        {"type": "INTEL", "description": "Package is clear. Maintain speed and vector."},
-        {"type": "COURIER", "description": "Untraceable currency drop available in this sector."}
-    ],
-    "COVER": [
-        {"type": "HAZARD", "description": "Routine patrol spotted. Act natural."},
-        {"type": "INTEL", "description": "Daily cover holding steady. No alerts."},
-        {"type": "INTEL", "description": "Local fuel reserves located along current vector."}
-    ],
-    "SAFEHOUSE": [
-        {"type": "HAZARD", "description": "Perimeter compromised. Find an alternate route."},
-        {"type": "INTEL", "description": "Safehouse lockdown lifted. Clear to approach."},
-        {"type": "INTEL", "description": "Home-lock active. Proceed securely to final waypoint."}
-    ]
-}
+STORYLINE_EVENTS = [
+    {"type": "HAZARD", "description": "Police unit reported ahead. Maintain low profile."},
+    {"type": "HAZARD", "description": "Surveillance detected. Keep moving, do not linger."},
+    {"type": "INTEL", "description": "Package secure. Proceed to extraction."}
+]
 
 class TelemetryPacket(BaseModel):
     agent_id: str
@@ -43,7 +19,7 @@ class TelemetryPacket(BaseModel):
     longitude: float
     target_lat: Optional[float] = None
     target_lon: Optional[float] = None
-    mission_profile: Optional[str] = "DEFAULT"
+    is_off_course: Optional[bool] = False
 
 def get_road_route(lat1, lon1, lat2, lon2):
     # Using OSRM (No API Key Required)
@@ -69,19 +45,12 @@ def calculate_distance(lat1, lon1, lat2, lon2):
 
 @app.post("/api/v1/telemetry")
 async def process_agent_movement(packet: TelemetryPacket):
-    # Security Gateway Validation
-    validation = SecurityGateway.validate_telemetry(packet.latitude, packet.longitude, packet.agent_id)
-    if validation["status"] == "REJECTED":
-        raise HTTPException(status_code=400, detail=validation["reason"])
-    
-    lat, lon = validation["data"]["lat"], validation["data"]["lon"]
-
     # If no target exists, fall back to default awaiting state
     if packet.target_lat is None or packet.target_lon is None:
         return {"action": "KEEP_MOVING", "display_alert": "AWAITING TARGET", "route": []}
 
-    # Calculate distance to target
-    dist = calculate_distance(lat, lon, packet.target_lat, packet.target_lon)
+    # Calculate distance if a target exists
+    dist = calculate_distance(packet.latitude, packet.longitude, packet.target_lat, packet.target_lon)
     
     # If within 100m, notify and clear target
     if dist <= 100:
@@ -94,14 +63,13 @@ async def process_agent_movement(packet: TelemetryPacket):
         }
     
     # Standard route calculation
-    route_path = get_road_route(lat, lon, packet.target_lat, packet.target_lon)
+    route_path = get_road_route(packet.latitude, packet.longitude, packet.target_lat, packet.target_lon)
 
-    # Context-Aware Storyline Engine (Randomized Event per Mission Type)
+    # Inject Storyline (Randomized Event Engine)
+    # Only trigger a storyline event 5% of the time while en route
     event = None
-    # 5% chance per ping to trigger a narrative event to avoid repetition
-    if random.random() < 0.05: 
-        pool = MISSION_STORIES.get(packet.mission_profile, MISSION_STORIES["DEFAULT"])
-        event = random.choice(pool)
+    if random.random() < 0.05:
+        event = random.choice(STORYLINE_EVENTS)
 
     return {
         "action": "PLAY_AUDIO" if event else "KEEP_MOVING",
